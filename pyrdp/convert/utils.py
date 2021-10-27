@@ -61,6 +61,30 @@ def createHandler(format: str, outputFileBase: str, progress=None) -> Tuple[str,
     return HandlerClass(outputFileBase, progress=progress) if HandlerClass else None, outputFileBase
 
 
+class Exported(Packet):
+    """60 byte EXPORTED_PDU header."""
+    # We could properly parse the EXPORTED_PDU struct, but we are mostly dealing with IP exported PDUs
+    # so let's just wing it.
+    name = "Exported"
+    fields_desc = [ 
+                    IntField("tag1Num", None),  # 4
+                    StrFixedLenField("proto", None, length=4),  # 8
+                    IntField("tag2Num", None),  # 12
+                    IPField("src", None),  # 16
+                    IntField("tag3Num", None),  # 20
+                    IPField("dst", None),  # 24
+                    IntField("tag4Num", None),  # 28
+                    IntField("portType", None),  # 32
+                    IntField("tag5Num", None),  # 36
+                    IntField("sport", None),  # 40
+                    IntField("tag6Num", None),  # 44
+                    IntField("dport", None),  # 48
+                    IntField("tag7Num", None),  # 52
+                    IntField("frame", None),   # 56
+                    IntField("endOfTags", None),  # 60
+    ]
+
+
 # noinspection PyUnresolvedReferences
 def tcp_both(p) -> str:
     """Session extractor which merges both sides of a TCP channel."""
@@ -69,7 +93,15 @@ def tcp_both(p) -> str:
         return str(
             sorted(["TCP", p[IP].src, p[TCP].sport, p[IP].dst, p[TCP].dport], key=str)
         )
-    return "Other"
+
+    # Need to make sure this is OK when non-TCP, non-exported data is present.
+    if "Ether" not in p:
+        x = Exported(p.load)
+        return str(
+                sorted([x.proto.upper(), x.src, x.sport, x.dst, x.dport], key=str)
+        )
+
+    return "Unsupported"
 
 
 # noinspection PyUnresolvedReferences
@@ -110,23 +142,23 @@ def loadSecrets(filename: str) -> dict:
 
 def canExtractSessionInfo(session: PacketList) -> bool:
     packet = session[0]
-    return IP in packet or Ether not in packet
+    # TODO: Eventually we should be able to wrap the session as an ExportedSession
+    # and check for the presence of exported.
+    return IP in packet or "Ether" not in packet
 
 def getSessionInfo(session: PacketList) -> Tuple[str, str, float, bool]:
     """Attempt to retrieve an (src, dst, ts, isPlaintext) tuple for a data stream."""
     packet = session[0]
 
-    if IP in packet:
-        # This is a plaintext stream.
-        #
-        # FIXME: This relies on the fact that decrypted traces are using EXPORTED_PDU and
-        #        thus have no `IP` layer, but it is technically possible to have a true
-        #        plaintext capture with very old implementations of RDP.
-        return (packet[IP].src, packet[IP].dst, packet.time, False)
+    # FIXME: This relies on the fact that decrypted traces are using EXPORTED_PDU and
+    #        thus have no `Ether` layer, but it is technically possible to have a true
+    #        plaintext capture with very old implementations of RDP.
+    if TCP in packet:
+        # Assume an encrypted stream...
+        return ((packet[IP].src, packet[TCP].sport), (packet[IP].dst, packet[TCP].dport), packet.time, False)
     elif Ether not in packet:
         # No Ethernet layer, so assume exported PDUs.
-        src = ".".join(str(b) for b in packet.load[12:16])
-        dst = ".".join(str(b) for b in packet.load[20:24])
-        return (src, dst, packet.time, True)
+        p = Exported(packet.load)
+        return (p.src, p.dst, packet.time, True)
 
     raise Exception("Invalid stream type. Must be TCP/TLS or EXPORTED PDU.")

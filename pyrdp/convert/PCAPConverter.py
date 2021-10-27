@@ -53,6 +53,7 @@ class PCAPConverter(Converter):
 
     def listSessions(self) -> List[Tuple[int, PCAPStream]]:
         print(f"[*] Analyzing PCAP '{self.inputFile}' ...")
+        
         bind_layers(TCP, TLS)
         pcap = sniff(offline=str(self.inputFile), session=TCPSession)
 
@@ -74,6 +75,7 @@ class PCAPConverter(Converter):
             if self.checkSrcExcluded(client) or self.checkDstExcluded(server):
                 continue
 
+            # Improvement: we could allow the src/dst filter to specify a port.
             print(f"    - {client} -> {server}:", end="", flush=True)
 
             if plaintext:
@@ -112,6 +114,8 @@ class PCAPConverter(Converter):
 
         try:
             replayer.tcp.recordConnectionClose()
+            if handler:
+                handler.cleanup()
         except struct.error:
             sys.stderr.write("[!] Couldn't close the session cleanly. Make sure that --src and --dst are correct.")
 
